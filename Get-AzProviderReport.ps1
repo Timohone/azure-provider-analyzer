@@ -20,8 +20,44 @@ Write-Host "║   AZURE PROVIDER ANALYSIS - HTML REPORT GENERATOR         ║" -
 Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
 
-# Provider-Kategorisierung definieren
-$providerCategories = @{
+# Microsoft Official Enterprise-Scale Azure Landing Zone Provider Requirements
+$microsoftALZ = @{
+    # Required for ALZ Deployment (Empty Subscriptions)
+    Required = @(
+        "Microsoft.Insights",
+        "Microsoft.AlertsManagement",
+        "Microsoft.OperationalInsights",
+        "Microsoft.OperationsManagement",
+        "Microsoft.Automation",
+        "Microsoft.Security",
+        "Microsoft.Network",
+        "Microsoft.EventGrid",
+        "Microsoft.ManagedIdentity",
+        "Microsoft.GuestConfiguration",
+        "Microsoft.Advisor",
+        "Microsoft.PolicyInsights"
+    )
+    
+    # Additional Recommended for Common Resources
+    Recommended = @(
+        "Microsoft.Compute",
+        "Microsoft.Storage",
+        "Microsoft.ResourceHealth",
+        "Microsoft.KeyVault",
+        "Microsoft.Sql",
+        "Microsoft.Capacity",
+        "Microsoft.ManagedServices",
+        "Microsoft.Management",
+        "Microsoft.SecurityInsights",
+        "Microsoft.Blueprint",
+        "Microsoft.Cache",
+        "Microsoft.RecoveryServices"
+    )
+}
+
+# Static Provider Categories (Known Facts)
+$staticCategories = @{
+    # Auto-Registered by Azure (no manual registration needed)
     AutoRegistered = @(
         "Microsoft.Authorization",
         "Microsoft.Resources",
@@ -42,6 +78,7 @@ $providerCategories = @{
         "Microsoft.ResourceHealth"
     )
     
+    # Deprecated Classic Providers (should be removed)
     Deprecated = @(
         "Microsoft.ClassicStorage",
         "Microsoft.ClassicNetwork",
@@ -49,99 +86,6 @@ $providerCategories = @{
         "Microsoft.ClassicSubscription",
         "Microsoft.ClassicInfrastructureMigrate"
     )
-    
-    MinimalBaseline = @(
-        "Microsoft.Insights",
-        "Microsoft.Storage",
-        "Microsoft.KeyVault"
-    )
-    
-    GovernanceBaseline = @(
-        "Microsoft.OperationalInsights",
-        "Microsoft.ManagedIdentity",
-        "Microsoft.AlertsManagement"
-    )
-    
-    LandingZonePublic = @(
-        "Microsoft.Web",
-        "Microsoft.Network",
-        "Microsoft.Compute",
-        "Microsoft.Sql",
-        "Microsoft.DocumentDB",
-        "Microsoft.ContainerService",
-        "Microsoft.ContainerInstance",
-        "Microsoft.ContainerRegistry"
-    )
-    
-    LandingZoneHybrid = @(
-        "Microsoft.Network",
-        "Microsoft.Compute",
-        "Microsoft.HybridCompute",
-        "Microsoft.HybridConnectivity",
-        "Microsoft.AzureStackHCI",
-        "Microsoft.RecoveryServices",
-        "Microsoft.NetApp",
-        "Microsoft.StorageSync"
-    )
-    
-    PlatformConnectivity = @(
-        "Microsoft.Network",
-        "Microsoft.Insights",
-        "Microsoft.OperationalInsights",
-        "Microsoft.Storage",
-        "Microsoft.ManagedIdentity",
-        "Microsoft.AlertsManagement"
-    )
-    
-    PlatformIdentity = @(
-        "Microsoft.KeyVault",
-        "Microsoft.ManagedIdentity",
-        "Microsoft.Insights",
-        "Microsoft.Storage",
-        "Microsoft.OperationalInsights",
-        "Microsoft.AAD"
-    )
-    
-    PlatformManagement = @(
-        "Microsoft.OperationalInsights",
-        "Microsoft.Automation",
-        "Microsoft.Insights",
-        "Microsoft.EventGrid",
-        "Microsoft.Storage",
-        "Microsoft.DataProtection",
-        "Microsoft.PolicyInsights",
-        "Microsoft.CostManagement",
-        "Microsoft.Scheduler",
-        "Microsoft.Logic"
-    )
-    
-    PlatformSecurity = @(
-        "Microsoft.Security",
-        "Microsoft.SecurityInsights",
-        "Microsoft.OperationalInsights",
-        "Microsoft.Insights",
-        "Microsoft.Storage",
-        "Microsoft.EventHub",
-        "Microsoft.KeyVault"
-    )
-}
-
-function Get-ProviderCategory {
-    param($providerName)
-    
-    $categories = @()
-    
-    foreach ($category in $providerCategories.GetEnumerator()) {
-        if ($category.Value -contains $providerName) {
-            $categories += $category.Key
-        }
-    }
-    
-    if ($categories.Count -eq 0) {
-        return @("Other")
-    }
-    
-    return $categories
 }
 
 # Verbindung prüfen
@@ -162,7 +106,7 @@ try {
 
 Write-Host ""
 
-# Output-Verzeichnis erstellen, falls nicht vorhanden
+# Output-Verzeichnis erstellen
 if (-not (Test-Path -Path $OutputPath)) {
     Write-Host "Creating output directory: $OutputPath" -ForegroundColor Yellow
     New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null
@@ -243,7 +187,6 @@ foreach ($sub in $subscriptions) {
         $registeredCount = ($allProviders | Where-Object { $_.RegistrationState -eq "Registered" }).Count
         $providersWithResourcesCount = $providersWithResources.Keys.Count
         
-        # Alle registrierten Provider für diese Subscription sammeln
         $registeredProviders = ($allProviders | Where-Object { $_.RegistrationState -eq "Registered" } | Select-Object -ExpandProperty ProviderNamespace | Sort-Object) -join '|'
         
         $subscriptionSummary += [PSCustomObject]@{
@@ -264,33 +207,86 @@ foreach ($sub in $subscriptions) {
 
 Write-Progress -Activity "Analyzing Subscriptions" -Completed
 Write-Host ""
-Write-Host "Generating HTML report..." -ForegroundColor Cyan
+Write-Host "Analyzing provider usage patterns..." -ForegroundColor Cyan
 
+# Provider Usage Summary mit dynamischer Kategorisierung
 $providerUsageSummary = $providerUsageMatrix.GetEnumerator() | ForEach-Object {
-    $categories = Get-ProviderCategory -providerName $_.Key
+    $providerName = $_.Key
+    $percentage = [math]::Round(($_.Value.Count / $subscriptions.Count) * 100, 2)
+    
+    # Dynamische Kategorisierung basierend auf tatsächlicher Verwendung
+    $categories = @()
+    
+    # Static Categories
+    if ($staticCategories.AutoRegistered -contains $providerName) {
+        $categories += "Auto-Registered"
+    }
+    if ($staticCategories.Deprecated -contains $providerName) {
+        $categories += "Deprecated"
+    }
+    
+    # Microsoft ALZ
+    if ($microsoftALZ.Required -contains $providerName) {
+        $categories += "ALZ-Required"
+    }
+    if ($microsoftALZ.Recommended -contains $providerName) {
+        $categories += "ALZ-Recommended"
+    }
+    
+    # Dynamic Categories basierend auf Usage
+    if ($percentage -ge 80) {
+        $categories += "Widely-Used"
+    }
+    elseif ($percentage -ge 50) {
+        $categories += "Common"
+    }
+    elseif ($percentage -ge 20) {
+        $categories += "Moderate"
+    }
+    else {
+        $categories += "Specialized"
+    }
+    
+    # Control Plane vs Data Plane
+    $isControlPlane = $_.Value.WithResources -eq 0
+    if ($isControlPlane) {
+        $categories += "Control-Plane"
+    } else {
+        $categories += "Data-Plane"
+    }
     
     [PSCustomObject]@{
-        Provider = $_.Key
+        Provider = $providerName
         RegisteredInSubscriptions = $_.Value.Count
         TotalSubscriptions = $subscriptions.Count
-        Percentage = [math]::Round(($_.Value.Count / $subscriptions.Count) * 100, 2)
+        Percentage = $percentage
         SubscriptionsWithResources = $_.Value.WithResources
         TotalResourcesAcrossAllSubs = $_.Value.TotalResources
-        IsControlPlane = $_.Value.WithResources -eq 0
+        IsControlPlane = $isControlPlane
         Categories = $categories
-        IsAutoRegistered = $categories -contains "AutoRegistered"
-        IsDeprecated = $categories -contains "Deprecated"
-        IsMinimalBaseline = $categories -contains "MinimalBaseline"
-        IsGovernanceBaseline = $categories -contains "GovernanceBaseline"
+        IsAutoRegistered = $staticCategories.AutoRegistered -contains $providerName
+        IsDeprecated = $staticCategories.Deprecated -contains $providerName
+        IsALZRequired = $microsoftALZ.Required -contains $providerName
+        IsALZRecommended = $microsoftALZ.Recommended -contains $providerName
+        IsWidelyUsed = $percentage -ge 80
+        IsCommon = $percentage -ge 50 -and $percentage -lt 80
     }
 } | Sort-Object RegisteredInSubscriptions -Descending
 
+# Statistiken
 $totalProviders = $providerUsageSummary.Count
 $controlPlaneCount = ($providerUsageSummary | Where-Object { $_.IsControlPlane }).Count
 $dataPlaneCount = $totalProviders - $controlPlaneCount
-$baselineProviders = $providerUsageSummary | Where-Object { $_.Percentage -gt 50 }
+$widelyUsedProviders = $providerUsageSummary | Where-Object { $_.IsWidelyUsed }
 $totalResources = ($subscriptionSummary | Measure-Object -Property TotalResources -Sum).Sum
 $deprecatedCount = ($providerUsageSummary | Where-Object { $_.IsDeprecated }).Count
+
+# ALZ Compliance Check
+$alzRequiredRegistered = $providerUsageSummary | Where-Object { $_.IsALZRequired }
+$alzRequiredMissing = $microsoftALZ.Required | Where-Object { $_ -notin $alzRequiredRegistered.Provider }
+$alzCompliancePercentage = [math]::Round(($alzRequiredRegistered.Count / $microsoftALZ.Required.Count) * 100, 1)
+
+Write-Host "Generating HTML report..." -ForegroundColor Cyan
 
 # HTML generieren
 $html = @"
@@ -358,6 +354,9 @@ $html = @"
             color: #0078d4;
         }
         
+        .stat-card.warning .value { color: #d83b01; }
+        .stat-card.success .value { color: #107c10; }
+        
         .section {
             padding: 40px 30px;
             border-bottom: 1px solid #e0e0e0;
@@ -374,7 +373,7 @@ $html = @"
         
         .baseline-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
             gap: 20px;
             margin-top: 20px;
         }
@@ -386,9 +385,14 @@ $html = @"
             padding: 20px;
         }
         
+        .baseline-card.highlight {
+            border: 2px solid #0078d4;
+            background: #f0f8ff;
+        }
+        
         .baseline-card h4 {
             color: #1a1a1a;
-            margin-bottom: 12px;
+            margin-bottom: 8px;
             font-size: 14px;
             font-weight: 500;
         }
@@ -397,6 +401,13 @@ $html = @"
             font-size: 12px;
             color: #666;
             margin-bottom: 12px;
+        }
+        
+        .baseline-card .count {
+            font-size: 11px;
+            color: #0078d4;
+            font-weight: 500;
+            margin-bottom: 8px;
         }
         
         .baseline-card .provider-list {
@@ -455,8 +466,9 @@ $html = @"
         .badge-data { background: #e8f5e9; color: #388e3c; }
         .badge-auto { background: #f3e5f5; color: #7b1fa2; }
         .badge-deprecated { background: #ffebee; color: #c62828; }
-        .badge-minimal { background: #e0f2f1; color: #00695c; }
-        .badge-governance { background: #fff3e0; color: #ef6c00; }
+        .badge-alz { background: #fff3e0; color: #f57c00; }
+        .badge-widely { background: #e8f5e9; color: #2e7d32; }
+        .badge-common { background: #e0f2f1; color: #00695c; }
         
         .progress-bar {
             width: 100%;
@@ -500,6 +512,15 @@ $html = @"
         .info-box {
             background: #e7f3ff;
             border-left: 3px solid #0078d4;
+            padding: 12px 16px;
+            margin: 16px 0;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        
+        .success-box {
+            background: #dff6dd;
+            border-left: 3px solid #107c10;
             padding: 12px 16px;
             margin: 16px 0;
             border-radius: 4px;
@@ -581,16 +602,16 @@ $html = @"
                 <div class="value">$totalProviders</div>
             </div>
             <div class="stat-card">
+                <div class="label">Widely Used</div>
+                <div class="value">$($widelyUsedProviders.Count)</div>
+            </div>
+            <div class="stat-card $(if($alzCompliancePercentage -lt 100){'warning'}else{'success'})">
+                <div class="label">ALZ Compliance</div>
+                <div class="value">$alzCompliancePercentage%</div>
+            </div>
+            <div class="stat-card">
                 <div class="label">Control Plane</div>
                 <div class="value">$controlPlaneCount</div>
-            </div>
-            <div class="stat-card">
-                <div class="label">Data Plane</div>
-                <div class="value">$dataPlaneCount</div>
-            </div>
-            <div class="stat-card">
-                <div class="label">Baseline >50%</div>
-                <div class="value">$($baselineProviders.Count)</div>
             </div>
             <div class="stat-card">
                 <div class="label">Resources</div>
@@ -599,30 +620,63 @@ $html = @"
         </div>
         
         <div class="section">
-            <h2>Provider Baseline Recommendations</h2>
+            <h2>Enterprise-Scale Azure Landing Zone Compliance</h2>
 "@
+
+if ($alzRequiredMissing.Count -gt 0) {
+    $html += @"
+            <div class="warning-box">
+                <strong>ALZ Compliance Gap:</strong> $($alzRequiredMissing.Count) required providers are missing or not widely registered. These are needed for Enterprise-Scale ALZ deployment.
+            </div>
+"@
+} else {
+    $html += @"
+            <div class="success-box">
+                <strong>ALZ Compliant:</strong> All required Enterprise-Scale ALZ providers are registered across your subscriptions.
+            </div>
+"@
+}
 
 if ($deprecatedCount -gt 0) {
     $html += @"
             <div class="warning-box">
-                <strong>Warning:</strong> $deprecatedCount deprecated Classic providers detected. Consider removing these in a modernization effort.
+                <strong>Deprecated Providers:</strong> $deprecatedCount Classic providers detected. Consider removing these in a modernization effort.
             </div>
 "@
 }
 
 $html += @"
             <div class="info-box">
-                <strong>Note:</strong> Auto-registered providers (Authorization, Resources, Consumption, etc.) are already available in all subscriptions.
+                <strong>Analysis Method:</strong> Provider categories are determined dynamically based on actual usage patterns in your tenant (Widely Used ≥80%, Common ≥50%) combined with Microsoft best practices.
             </div>
             
             <div class="baseline-grid">
-                <div class="baseline-card">
-                    <h4>Minimal Baseline - All Subscriptions</h4>
-                    <div class="description">Essential providers for every new subscription (Tier 1)</div>
+                <div class="baseline-card highlight">
+                    <h4>Microsoft ALZ Required</h4>
+                    <div class="description">Required for Enterprise-Scale with predefined template (empty subscriptions)</div>
+                    <div class="count">$($microsoftALZ.Required.Count) providers - $($alzRequiredRegistered.Count) found in tenant</div>
                     <ul class="provider-list">
 "@
 
-foreach ($provider in $providerCategories.MinimalBaseline) {
+foreach ($provider in $microsoftALZ.Required) {
+    $isRegistered = $alzRequiredRegistered.Provider -contains $provider
+    $marker = if ($isRegistered) { "✓" } else { "✗" }
+    $style = if ($isRegistered) { "color: #107c10;" } else { "color: #d83b01;" }
+    $html += "<li style='$style'>$marker $provider</li>"
+}
+
+$html += @"
+                    </ul>
+                </div>
+                
+                <div class="baseline-card">
+                    <h4>Microsoft ALZ Recommended</h4>
+                    <div class="description">Additional recommended providers for common resources</div>
+                    <div class="count">$($microsoftALZ.Recommended.Count) providers</div>
+                    <ul class="provider-list">
+"@
+
+foreach ($provider in $microsoftALZ.Recommended) {
     $html += "<li>$provider</li>"
 }
 
@@ -631,97 +685,14 @@ $html += @"
                 </div>
                 
                 <div class="baseline-card">
-                    <h4>Governance Baseline</h4>
-                    <div class="description">Recommended for all subscriptions (Tier 2)</div>
+                    <h4>Widely Used in Tenant</h4>
+                    <div class="description">Registered in ≥80% of subscriptions (proven usage pattern)</div>
+                    <div class="count">$($widelyUsedProviders.Count) providers</div>
                     <ul class="provider-list">
 "@
 
-foreach ($provider in $providerCategories.GovernanceBaseline) {
-    $html += "<li>$provider</li>"
-}
-
-$html += @"
-                    </ul>
-                </div>
-                
-                <div class="baseline-card">
-                    <h4>Landing Zone - Public Cloud</h4>
-                    <div class="description">Additional providers for public cloud workloads</div>
-                    <ul class="provider-list">
-"@
-
-foreach ($provider in $providerCategories.LandingZonePublic | Select-Object -First 6) {
-    $html += "<li>$provider</li>"
-}
-
-$html += @"
-                    </ul>
-                </div>
-                
-                <div class="baseline-card">
-                    <h4>Landing Zone - Hybrid</h4>
-                    <div class="description">Additional providers for hybrid workloads</div>
-                    <ul class="provider-list">
-"@
-
-foreach ($provider in $providerCategories.LandingZoneHybrid | Select-Object -First 6) {
-    $html += "<li>$provider</li>"
-}
-
-$html += @"
-                    </ul>
-                </div>
-                
-                <div class="baseline-card">
-                    <h4>Platform - Connectivity</h4>
-                    <div class="description">Hub/Connectivity subscriptions</div>
-                    <ul class="provider-list">
-"@
-
-foreach ($provider in $providerCategories.PlatformConnectivity) {
-    $html += "<li>$provider</li>"
-}
-
-$html += @"
-                    </ul>
-                </div>
-                
-                <div class="baseline-card">
-                    <h4>Platform - Identity</h4>
-                    <div class="description">Identity management subscriptions</div>
-                    <ul class="provider-list">
-"@
-
-foreach ($provider in $providerCategories.PlatformIdentity) {
-    $html += "<li>$provider</li>"
-}
-
-$html += @"
-                    </ul>
-                </div>
-                
-                <div class="baseline-card">
-                    <h4>Platform - Management</h4>
-                    <div class="description">Central management subscription</div>
-                    <ul class="provider-list">
-"@
-
-foreach ($provider in $providerCategories.PlatformManagement | Select-Object -First 6) {
-    $html += "<li>$provider</li>"
-}
-
-$html += @"
-                    </ul>
-                </div>
-                
-                <div class="baseline-card">
-                    <h4>Platform - Security</h4>
-                    <div class="description">Security/Sentinel subscription</div>
-                    <ul class="provider-list">
-"@
-
-foreach ($provider in $providerCategories.PlatformSecurity) {
-    $html += "<li>$provider</li>"
+foreach ($provider in $widelyUsedProviders | Select-Object -First 12) {
+    $html += "<li>$($provider.Provider) ($($provider.Percentage)%)</li>"
 }
 
 $html += @"
@@ -749,17 +720,20 @@ $html += @"
 foreach ($provider in $providerUsageSummary) {
     $badges = ""
     
+    if ($provider.IsALZRequired) {
+        $badges += '<span class="badge badge-alz">ALZ-Required</span>'
+    }
+    if ($provider.IsWidelyUsed) {
+        $badges += '<span class="badge badge-widely">Widely-Used</span>'
+    }
+    if ($provider.IsCommon) {
+        $badges += '<span class="badge badge-common">Common</span>'
+    }
     if ($provider.IsAutoRegistered) {
         $badges += '<span class="badge badge-auto">Auto</span>'
     }
     if ($provider.IsDeprecated) {
         $badges += '<span class="badge badge-deprecated">Deprecated</span>'
-    }
-    if ($provider.IsMinimalBaseline) {
-        $badges += '<span class="badge badge-minimal">Minimal</span>'
-    }
-    if ($provider.IsGovernanceBaseline) {
-        $badges += '<span class="badge badge-governance">Governance</span>'
     }
     if ($provider.IsControlPlane) {
         $badges += '<span class="badge badge-control">Control</span>'
@@ -806,7 +780,6 @@ $html += @"
 $rowIndex = 0
 foreach ($sub in $subscriptionSummary) {
     $providers = $sub.RegisteredProvidersList -split '\|'
-    $providersJson = ($providers | ConvertTo-Json -Compress).Replace('"', '&quot;')
     
     $html += @"
                     <tr class="clickable-row" onclick="toggleProviders($rowIndex)">
@@ -868,7 +841,7 @@ $html += @"
             });
             
             var tbody = table.querySelector('tbody');
-            rows.forEach(function(row, index) {
+            rows.forEach(function(row) {
                 var detailsRow = row.nextElementSibling;
                 tbody.appendChild(row);
                 if (detailsRow && detailsRow.querySelector('.provider-details')) {
@@ -896,7 +869,6 @@ $html += @"
             if (details.classList.contains('show')) {
                 details.classList.remove('show');
             } else {
-                // Close all other open details
                 document.querySelectorAll('.provider-details.show').forEach(function(el) {
                     el.classList.remove('show');
                 });
@@ -911,7 +883,6 @@ $html += @"
 $htmlFile = Join-Path $OutputPath "azure-provider-report-$timestamp.html"
 $html | Out-File -FilePath $htmlFile -Encoding UTF8
 
-# Absoluten Pfad ermitteln für bessere Anzeige
 $absolutePath = (Resolve-Path $htmlFile).Path
 
 Write-Host ""
@@ -921,6 +892,11 @@ Write-Host "╚═════════════════════�
 Write-Host ""
 Write-Host "Report saved to:" -ForegroundColor Yellow
 Write-Host $absolutePath -ForegroundColor Cyan
+Write-Host ""
+Write-Host "ALZ Compliance: $alzCompliancePercentage% ($($alzRequiredRegistered.Count)/$($microsoftALZ.Required.Count) required providers)" -ForegroundColor $(if($alzCompliancePercentage -eq 100){'Green'}else{'Yellow'})
+if ($alzRequiredMissing.Count -gt 0) {
+    Write-Host "Missing ALZ Providers: $($alzRequiredMissing -join ', ')" -ForegroundColor Red
+}
 Write-Host ""
 Write-Host "Opening in default browser..." -ForegroundColor Yellow
 Start-Process $htmlFile
